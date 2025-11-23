@@ -1,8 +1,11 @@
-name: meaning-v3-auto-build
+name: meaning-v3-autobuild
 
 on:
   push:
     branches: ["main"]
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -14,15 +17,26 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-
+    # ---------------------------------------------------------
+    # 기본 체크아웃
+    # ---------------------------------------------------------
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Install deps (Linux/macOS)
-      if: runner.os != 'Windows'
+    # ---------------------------------------------------------
+    # OS별 종속성 설치
+    # ---------------------------------------------------------
+    - name: Install deps (Linux)
+      if: runner.os == 'Linux'
       run: |
-        sudo apt-get update || true
-        sudo apt-get install -y gcc nasm || true
+        sudo apt-get update
+        sudo apt-get install -y gcc clang nasm zip
+
+    - name: Install deps (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        brew update
+        brew install nasm || true
 
     - name: Install deps (Windows)
       if: runner.os == 'Windows'
@@ -32,12 +46,18 @@ jobs:
         choco install nasm -y
         refreshenv
 
-    - name: Run Meaning Transpiler
+    # ---------------------------------------------------------
+    # 의미 기반 IR v3 생성 + 백엔드 생성
+    # ---------------------------------------------------------
+    - name: Run Meaning Transpiler (v3)
       shell: bash
       run: |
         python3 src/meaning_transpiler.py src/ out/
 
-    - name: Run Meaning VM (semantic execution test)
+    # ---------------------------------------------------------
+    # Meaning VM v3 테스트 (semantic execution)
+    # ---------------------------------------------------------
+    - name: Run Meaning VM Test
       shell: bash
       run: |
         python3 - << 'EOF'
@@ -51,38 +71,57 @@ vm = MeaningVM(ir)
 vm.run()
 EOF
 
-    - name: Build LLVM C
+    # ---------------------------------------------------------
+    # LLVM C 빌드 (모든 OS 공통)
+    # ---------------------------------------------------------
+    - name: Build LLVM C Backend
       shell: bash
       run: |
         cd out/llvm
         gcc main.c -o main
 
-    - name: Zip artifacts
+    # ---------------------------------------------------------
+    # 아티팩트 ZIP 생성 (OS별 zip 실행기 통합)
+    # ---------------------------------------------------------
+    - name: Create ZIP
       shell: bash
       run: |
         cd out
         zip -r build_${{ matrix.os }}.zip .
 
+    # ---------------------------------------------------------
+    # OS별 아티팩트 업로드
+    # ---------------------------------------------------------
     - uses: actions/upload-artifact@v4
       with:
         name: build-${{ matrix.os }}
         path: out/build_${{ matrix.os }}.zip
 
+  # -----------------------------------------------------------
+  # 릴리즈 Job (자동 tag + release 생성)
+  # -----------------------------------------------------------
   release:
     needs: build
     runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/heads/main')
 
     steps:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Download all artifacts
+    - name: Download Artifacts
       uses: actions/download-artifact@v4
+
+    - name: Generate Release Tag
+      id: gen_tag
+      run: |
+        echo "tag=v3.${GITHUB_RUN_NUMBER}" >> $GITHUB_OUTPUT
 
     - name: Create Release
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: v3-${{ github.run_number }}
+        tag_name: ${{ steps.gen_tag.outputs.tag }}
+        name: Meaning v3 Auto Release (${{ steps.gen_tag.outputs.tag }})
         files: |
           build-ubuntu-latest/build_ubuntu-latest.zip
           build-macos-latest/build_macos-latest.zip
