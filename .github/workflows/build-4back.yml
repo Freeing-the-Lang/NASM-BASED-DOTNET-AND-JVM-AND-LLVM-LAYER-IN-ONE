@@ -1,4 +1,4 @@
-name: unified-nasm-dotnet-jvm-llvm-v2
+name: unified-nasm-dotnet-jvm-llvm-auto-release-v3
 
 on:
   push:
@@ -18,18 +18,20 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
+      ############################################################
+      # CHECKOUT
+      ############################################################
       - name: Checkout
         uses: actions/checkout@v4
 
       ############################################################
-      # OS Dependencies
+      # DEPENDENCIES
       ############################################################
-
       - name: Install deps (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt update
-          sudo apt install -y nasm clang openjdk-17-jdk dotnet-sdk-8.0 zip python3
+          sudo apt install -y nasm clang openjdk-17-jdk zip python3 dotnet-sdk-8.0
 
       - name: Install deps (macOS)
         if: matrix.os == 'macos-latest'
@@ -39,23 +41,31 @@ jobs:
       - name: Install deps (Windows)
         if: matrix.os == 'windows-latest'
         run: |
-          choco install nasm llvm openjdk dotnet-8.0 python
+          choco install nasm -y
+          choco install llvm -y
+          choco install openjdk -y
         shell: pwsh
 
-      ############################################################
-      # Meaning Based Transpiler (파일은 src/에 있음)
-      ############################################################
+      # ✔ Windows에서 안전한 .NET 설치
+      - name: Install .NET 8 SDK
+        if: matrix.os == 'windows-latest'
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: '8.0.x'
 
+      ############################################################
+      # RUN MEANING TRANSPILER
+      ############################################################
       - name: Run Meaning-Based Transpiler
         run: |
           python3 src/meaning_transpiler.py src/ out/
         shell: bash
 
       ############################################################
-      # Build Backends
+      # BACKEND BUILDS
       ############################################################
 
-      # 1) NASM Native
+      # NASM Native
       - name: Build NASM Native
         run: |
           if [ -f out/native/main.asm ]; then
@@ -64,7 +74,7 @@ jobs:
           fi
         shell: bash
 
-      # 2) LLVM (clang → binary)
+      # LLVM C Backend → binary
       - name: Build LLVM Backend
         run: |
           if [ -f out/llvm/main.c ]; then
@@ -72,7 +82,7 @@ jobs:
           fi
         shell: bash
 
-      # 3) JVM Backend
+      # JVM Backend → build jar
       - name: Build JVM Backend
         run: |
           if [ -f out/jvm/Main.java ]; then
@@ -81,31 +91,29 @@ jobs:
           fi
         shell: bash
 
-      # 4) .NET Backend
+      # .NET Backend
       - name: Build .NET Backend
         run: |
           if [ -f out/dotnet/Program.cs ]; then
-            dotnet new console -o dotnet_build -n TempProj --force
+            dotnet new console -o dotnet_build -n TProj --force
             cp out/dotnet/Program.cs dotnet_build/Program.cs
             dotnet build dotnet_build -c Release
-            cp dotnet_build/bin/Release/net8.0/TempProj.dll out/dotnet/
+            cp dotnet_build/bin/Release/net8.0/TProj.dll out/dotnet/
           fi
         shell: bash
 
       ############################################################
-      # Packaging
+      # PACKAGE ZIP
       ############################################################
-
-      - name: Package (ZIP)
+      - name: Package build artifacts
         run: |
           cd out
           zip -r build_${{ matrix.os }}.zip ./
         shell: bash
 
       ############################################################
-      # SHA256 Proof + Ledger
+      # PROOF + LEDGER
       ############################################################
-
       - name: SHA256 Proof
         run: |
           mkdir -p proof
@@ -118,22 +126,57 @@ jobs:
           echo "Timestamp: $(date +%Y%m%d-%H%M%S)" > proof/ledger_${{ matrix.os }}.txt
           echo "Commit: $GITHUB_SHA" >> proof/ledger_${{ matrix.os }}.txt
           echo "OS: ${{ matrix.os }}" >> proof/ledger_${{ matrix.os }}.txt
-          echo "Transpiler: meaning_transpiler.py in src/" >> proof/ledger_${{ matrix.os }}.txt
+          echo "MeaningTranspiler: src/meaning_transpiler.py" >> proof/ledger_${{ matrix.os }}.txt
         shell: bash
 
       ############################################################
-      # Artifact Upload
+      # UPLOAD ARTIFACTS
       ############################################################
-
       - name: Upload Build ZIP
         uses: actions/upload-artifact@v4
         with:
           name: build_${{ matrix.os }}
           path: out/build_${{ matrix.os }}.zip
 
-      - name: Upload Proof Files
+      - name: Upload Proof
         uses: actions/upload-artifact@v4
         with:
           name: proof_${{ matrix.os }}
           path: proof/
 
+  ###########################################################################
+  # RELEASE JOB
+  ###########################################################################
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+
+      - name: Generate Tag
+        id: tag
+        run: |
+          TAG="v$(date +'%Y%m%d%H%M%S')"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "Auto Release ${{ steps.tag.outputs.tag }}"
+          body: |
+            ### Automatic Release
+            - 3 OS builds
+            - Meaning IR
+            - ProofLedger
+            - SHA256 verification
+          files: dist/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
