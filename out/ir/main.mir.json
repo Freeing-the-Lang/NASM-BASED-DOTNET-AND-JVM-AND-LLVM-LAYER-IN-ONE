@@ -1,0 +1,53 @@
+{
+  "meta": { "source_language": "rust" },
+  "functions": [
+    {
+      "name": "main",
+      "args": [],
+      "return_type": "unit",
+      "body": {
+        "kind": "block",
+        "stmts": [
+          {
+            "kind": "if",
+            "condition": {
+              "kind": "binary",
+              "op": ">",
+              "left": {"kind": "literal", "value": 10},
+              "right": {"kind": "literal", "value": 5}
+            },
+            "then": {
+              "kind": "block",
+              "stmts": [
+                {
+                  "kind": "call",
+                  "target": "print",
+                  "args": ["Greater"]
+                }
+              ]
+            },
+            "else": {
+              "kind": "call",
+              "target": "print",
+              "args": ["Not greater"]
+            }
+          },
+          {
+            "kind": "while",
+            "condition": {
+              "kind": "literal",
+              "value": true
+            },
+            "body": {
+              "kind": "block",
+              "stmts": [
+                {"kind": "call", "target": "print", "args": ["loop"]},
+                {"kind": "return", "value": null}
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
