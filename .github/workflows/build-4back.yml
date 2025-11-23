@@ -1,12 +1,8 @@
-name: unified-auto-release-exec-v6
+name: meaning-v3-auto-build
 
 on:
   push:
     branches: ["main"]
-  workflow_dispatch:
-
-permissions:
-  contents: write
 
 jobs:
   build:
@@ -18,177 +14,78 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      ############################################################
-      # CHECKOUT
-      ############################################################
-      - name: Checkout
-        uses: actions/checkout@v4
 
-      ############################################################
-      # DEPENDENCIES
-      ############################################################
-      - name: Install deps (Linux)
-        if: matrix.os == 'ubuntu-latest'
-        shell: bash
-        run: |
-          sudo apt update
-          sudo apt install -y nasm clang openjdk-17-jdk zip python3 dotnet-sdk-8.0
+    - name: Checkout
+      uses: actions/checkout@v4
 
-      - name: Install deps (macOS)
-        if: matrix.os == 'macos-latest'
-        shell: bash
-        run: |
-          brew install nasm llvm openjdk dotnet zip python
+    - name: Install deps (Linux/macOS)
+      if: runner.os != 'Windows'
+      run: |
+        sudo apt-get update || true
+        sudo apt-get install -y gcc nasm || true
 
-      - name: Install deps (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: bash
-        run: |
-          choco install nasm -y
-          choco install llvm -y
-          choco install openjdk -y
+    - name: Install deps (Windows)
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        choco install mingw -y
+        choco install nasm -y
+        refreshenv
 
-      - name: Install .NET 8 SDK
-        if: matrix.os == 'windows-latest'
-        uses: actions/setup-dotnet@v3
-        with:
-          dotnet-version: '8.0.x'
+    - name: Run Meaning Transpiler
+      shell: bash
+      run: |
+        python3 src/meaning_transpiler.py src/ out/
 
-      ############################################################
-      # MEANING TRANSPILER
-      ############################################################
-      - name: Run Meaning-Based Transpiler
-        shell: bash
-        run: |
-          python3 src/meaning_transpiler.py src/ out/
+    - name: Run Meaning VM (semantic execution test)
+      shell: bash
+      run: |
+        python3 - << 'EOF'
+import json
+from src.meaning_transpiler import MeaningVM
 
-      ############################################################
-      # BACKEND BUILDS → 실행파일 생성
-      ############################################################
+with open("out/ir.json") as f:
+    ir = json.load(f)
 
-      # Linux Native
-      - name: Build Native (Linux)
-        if: matrix.os == 'ubuntu-latest'
-        shell: bash
-        run: |
-          if [ -f out/native/main.asm ]; then
-            nasm -f elf64 out/native/main.asm -o out/native/main.o
-            clang out/native/main.o -o out/linux_app
-          fi
+vm = MeaningVM(ir)
+vm.run()
+EOF
 
-      # macOS Native
-      - name: Build Native (macOS)
-        if: matrix.os == 'macos-latest'
-        shell: bash
-        run: |
-          if [ -f out/native/main.asm ]; then
-            nasm -f macho64 out/native/main.asm -o out/native/main.o
-            clang out/native/main.o -o out/macos_app
-          fi
+    - name: Build LLVM C
+      shell: bash
+      run: |
+        cd out/llvm
+        gcc main.c -o main
 
-      # Windows Native
-      - name: Build Native (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: bash
-        run: |
-          if [ -f out/native/main.asm ]; then
-            nasm -f win64 out/native/main.asm -o out/native/main.obj
-            clang out/native/main.obj -o out/windows_app.exe
-          fi
+    - name: Zip artifacts
+      shell: bash
+      run: |
+        cd out
+        zip -r build_${{ matrix.os }}.zip .
 
-      ############################################################
-      # PACKAGE ZIP / 7Z
-      ############################################################
-      - name: Package Build
-        shell: bash
-        run: |
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            "C:/Program Files/7-Zip/7z.exe" a out/build_windows.zip out/*
-          else
-            cd out
-            zip -r build_${{ matrix.os }}.zip ./
-          fi
+    - uses: actions/upload-artifact@v4
+      with:
+        name: build-${{ matrix.os }}
+        path: out/build_${{ matrix.os }}.zip
 
-      ############################################################
-      # PROOF + LEDGER
-      ############################################################
-      - name: SHA256 Proof
-        shell: bash
-        run: |
-          mkdir -p proof
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            sha256sum out/build_windows.zip > proof/sha256_windows.txt
-          else
-            sha256sum out/build_${{ matrix.os }}.zip > proof/sha256_${{ matrix.os }}.txt
-          fi
-
-      - name: Build Ledger
-        shell: bash
-        run: |
-          mkdir -p proof
-          echo "Timestamp: $(date +%Y%m%d-%H%M%S)" > proof/ledger_${{ matrix.os }}.txt
-          echo "Commit: $GITHUB_SHA" >> proof/ledger_${{ matrix.os }}.txt
-          echo "OS: ${{ matrix.os }}" >> proof/ledger_${{ matrix.os }}.txt
-          echo "MeaningTranspiler: src/meaning_transpiler.py" >> proof/ledger_${{ matrix.os }}.txt
-
-      ############################################################
-      # ARTIFACTS
-      ############################################################
-      - name: Upload Build
-        uses: actions/upload-artifact@v4
-        with:
-          name: build_${{ matrix.os }}
-          path: |
-            out/linux_app
-            out/macos_app
-            out/windows_app.exe
-            out/build_${{ matrix.os }}.zip
-            out/build_windows.zip
-            out/*.jar
-            out/*.dll
-            out/*.o
-            out/*.obj
-
-      - name: Upload Proofs
-        uses: actions/upload-artifact@v4
-        with:
-          name: proof_${{ matrix.os }}
-          path: proof/
-
-  ###########################################################################
-  # RELEASE
-  ###########################################################################
   release:
     needs: build
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    - name: Checkout
+      uses: actions/checkout@v4
 
-      - name: Download All Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: dist/
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
 
-      - name: Generate Tag
-        id: tag
-        shell: bash
-        run: |
-          TAG="v$(date +'%Y%m%d%H%M%S')"
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ steps.tag.outputs.tag }}
-          name: "Auto Release ${{ steps.tag.outputs.tag }}"
-          body: |
-            ### Automatic Release (Exec Included)
-            - Linux / macOS / Windows 실행파일 포함
-            - Meaning IR
-            - NASM / LLVM / JVM / .NET 빌드
-            - ProofLedger + SHA256
-          files: dist/**/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: v3-${{ github.run_number }}
+        files: |
+          build-ubuntu-latest/build_ubuntu-latest.zip
+          build-macos-latest/build_macos-latest.zip
+          build-windows-latest/build_windows-latest.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
