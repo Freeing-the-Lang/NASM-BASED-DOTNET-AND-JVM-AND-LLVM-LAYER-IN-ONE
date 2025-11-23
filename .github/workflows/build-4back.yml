@@ -1,4 +1,4 @@
-name: unified-nasm-dotnet-jvm-llvm-auto-release-v3
+name: unified-nasm-dotnet-jvm-llvm-auto-release-v4
 
 on:
   push:
@@ -46,7 +46,7 @@ jobs:
           choco install openjdk -y
         shell: pwsh
 
-      # ✔ Windows에서 안전한 .NET 설치
+      # ✔ Windows에서 dotnet 설치는 공식 액션 사용
       - name: Install .NET 8 SDK
         if: matrix.os == 'windows-latest'
         uses: actions/setup-dotnet@v3
@@ -54,7 +54,7 @@ jobs:
           dotnet-version: '8.0.x'
 
       ############################################################
-      # RUN MEANING TRANSPILER
+      # Meaning-Based Transpiler
       ############################################################
       - name: Run Meaning-Based Transpiler
         run: |
@@ -65,7 +65,6 @@ jobs:
       # BACKEND BUILDS
       ############################################################
 
-      # NASM Native
       - name: Build NASM Native
         run: |
           if [ -f out/native/main.asm ]; then
@@ -74,7 +73,6 @@ jobs:
           fi
         shell: bash
 
-      # LLVM C Backend → binary
       - name: Build LLVM Backend
         run: |
           if [ -f out/llvm/main.c ]; then
@@ -82,7 +80,6 @@ jobs:
           fi
         shell: bash
 
-      # JVM Backend → build jar
       - name: Build JVM Backend
         run: |
           if [ -f out/jvm/Main.java ]; then
@@ -91,7 +88,6 @@ jobs:
           fi
         shell: bash
 
-      # .NET Backend
       - name: Build .NET Backend
         run: |
           if [ -f out/dotnet/Program.cs ]; then
@@ -103,12 +99,17 @@ jobs:
         shell: bash
 
       ############################################################
-      # PACKAGE ZIP
+      # PACKAGE (ZIP/7ZIP)
       ############################################################
-      - name: Package build artifacts
+      - name: Package Build Artifacts
         run: |
-          cd out
-          zip -r build_${{ matrix.os }}.zip ./
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            echo "Using 7zip for Windows packaging"
+            "C:/Program Files/7-Zip/7z.exe" a out/build_windows.zip out/*
+          else
+            cd out
+            zip -r build_${{ matrix.os }}.zip ./
+          fi
         shell: bash
 
       ############################################################
@@ -117,7 +118,11 @@ jobs:
       - name: SHA256 Proof
         run: |
           mkdir -p proof
-          sha256sum out/build_${{ matrix.os }}.zip > proof/sha256_${{ matrix.os }}.txt
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            sha256sum out/build_windows.zip > proof/sha256_windows.txt
+          else
+            sha256sum out/build_${{ matrix.os }}.zip > proof/sha256_${{ matrix.os }}.txt
+          fi
         shell: bash
 
       - name: Build Ledger
@@ -132,20 +137,25 @@ jobs:
       ############################################################
       # UPLOAD ARTIFACTS
       ############################################################
-      - name: Upload Build ZIP
+      - name: Upload Build
         uses: actions/upload-artifact@v4
         with:
           name: build_${{ matrix.os }}
-          path: out/build_${{ matrix.os }}.zip
+          path: |
+            out/build_${{ matrix.os }}.zip
+            out/build_windows.zip
+            out/llvm_app
+            out/native_app
+            out/jvm_app.jar
 
-      - name: Upload Proof
+      - name: Upload Proofs
         uses: actions/upload-artifact@v4
         with:
           name: proof_${{ matrix.os }}
           path: proof/
 
   ###########################################################################
-  # RELEASE JOB
+  # AUTO RELEASE
   ###########################################################################
   release:
     needs: build
@@ -155,7 +165,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download artifacts
+      - name: Download All Artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist/
@@ -172,11 +182,12 @@ jobs:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: "Auto Release ${{ steps.tag.outputs.tag }}"
           body: |
-            ### Automatic Release
-            - 3 OS builds
+            ### Automatic Multi-Backend Release
             - Meaning IR
-            - ProofLedger
-            - SHA256 verification
+            - NASM / LLVM / JVM / .NET builds
+            - Windows 7zip packaging
+            - ProofLedger + SHA256 Verification
           files: dist/**/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
