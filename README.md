@@ -1,1 +1,3 @@
 # NASM-BASED-DOTNET-AND-JVM-AND-LLVM-LAYER-IN-ONE
+
+NASM - Meaning based transpiler -DOTNET/JVM/LLVM - Languages
