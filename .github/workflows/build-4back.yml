@@ -1,4 +1,4 @@
-name: meaning-v3-autobuild
+name: meaning-v3-3OS-full
 
 on:
   push:
@@ -17,24 +17,27 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
+    # ---------------------------------------------------------
+    # Checkout
+    # ---------------------------------------------------------
     - name: Checkout
       uses: actions/checkout@v4
 
-    # Linux
+    # ---------------------------------------------------------
+    # Install Dependencies
+    # ---------------------------------------------------------
     - name: Install deps (Linux)
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
         sudo apt-get install -y gcc clang nasm zip
 
-    # macOS
     - name: Install deps (macOS)
       if: runner.os == 'macOS'
       run: |
         brew update
         brew install nasm || true
 
-    # Windows
     - name: Install deps (Windows)
       if: runner.os == 'Windows'
       shell: powershell
@@ -42,42 +45,103 @@ jobs:
         choco install mingw -y
         choco install nasm -y
         refreshenv
+        gcc --version
 
-    # Meaning IR v3 생성
+    # ---------------------------------------------------------
+    # Meaning IR 생성
+    # ---------------------------------------------------------
     - name: Run Meaning Transpiler
       shell: bash
       run: |
         python3 src/meaning_engine.py transpile src/ out/
+        echo "=== IR created ==="
+        cat out/ir.json
 
-    # Meaning VM v3 테스트 실행
-    - name: Run Meaning VM
+    # ---------------------------------------------------------
+    # Meaning VM 실행 테스트
+    # ---------------------------------------------------------
+    - name: Run Meaning VM (semantic execution)
       shell: bash
       run: |
         python3 src/meaning_engine.py runvm out/ir.json
 
-    # LLVM C 빌드
-    - name: Build LLVM
+    # ---------------------------------------------------------
+    # Build Native Executable for each OS
+    # ---------------------------------------------------------
+    - name: Build LLVM Executable (Linux/macOS)
+      if: runner.os != 'Windows'
       shell: bash
       run: |
         cd out/llvm
-        gcc main.c -o main
+        gcc main.c -o meaning_app
+        echo "=== Built Linux/macOS executable ==="
+        ls -l meaning_app
 
-    # ZIP 생성
+    - name: Build LLVM Executable (Windows)
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        cd out/llvm
+        gcc main.c -o meaning_app.exe
+        Write-Host "=== Built Windows executable ==="
+        dir meaning_app.exe
+
+    # ---------------------------------------------------------
+    # Run Executable (3OS Full Execution Test)
+    # ---------------------------------------------------------
+    - name: Run Executable (Linux/macOS)
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        cd out/llvm
+        chmod +x meaning_app
+        echo "=== Running executable ==="
+        ./meaning_app
+
+    - name: Run Executable (Windows)
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        cd out/llvm
+        Write-Host "=== Running executable ==="
+        ./meaning_app.exe
+
+    # ---------------------------------------------------------
+    # Create ZIP
+    # ---------------------------------------------------------
     - name: Create ZIP (Linux/macOS)
       if: runner.os != 'Windows'
       shell: bash
       run: |
         cd out
-        zip -r build_${{ matrix.os }}.zip .
+        zip -r build_${{ matrix.os }}.zip \
+            llvm/meaning_app \
+            ir.json \
+            jvm \
+            dotnet \
+            native
+        ls -l build_${{ matrix.os }}.zip
 
     - name: Create ZIP (Windows)
       if: runner.os == 'Windows'
       shell: powershell
       run: |
         cd out
-        Compress-Archive -Path * -DestinationPath build_windows-latest.zip
+        Compress-Archive -Path llvm\meaning_app.exe, ir.json, jvm, dotnet, native `
+          -DestinationPath build_windows-latest.zip
+        dir build_windows-latest.zip
 
+    # ---------------------------------------------------------
+    # Upload artifacts
+    # ---------------------------------------------------------
+    - uses: actions/upload-artifact@v4
+      with:
+        name: build-${{ matrix.os }}
+        path: out/*.zip
 
+  # ---------------------------------------------------------
+  # Release Job
+  # ---------------------------------------------------------
   release:
     needs: build
     runs-on: ubuntu-latest
@@ -93,9 +157,13 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         tag_name: v3.${{ github.run_number }}
+        name: Meaning Engine v3 Release (${{ github.run_number }})
+        body: |
+          Meaning Engine v3 – Automatic 3OS Build + Execution Verified
         files: |
-          build-ubuntu-latest/build_ubuntu-latest.zip
-          build-macos-latest/build_macos-latest.zip
-          build-windows-latest/build_windows-latest.zip
+          build-ubuntu-latest/*.zip
+          build-macos-latest/*.zip
+          build-windows-latest/*.zip
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
