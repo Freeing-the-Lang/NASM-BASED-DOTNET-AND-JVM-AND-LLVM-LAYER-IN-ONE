@@ -1,0 +1,124 @@
+name: unified-nasm-dotnet-jvm-llvm-v1
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      ############################################################
+      # Dependencies per OS
+      ############################################################
+      - name: Install deps (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt update
+          sudo apt install -y nasm clang openjdk-17-jdk dotnet-sdk-8.0 zip
+
+      - name: Install deps (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew install nasm llvm openjdk dotnet zip
+
+      - name: Install deps (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          choco install nasm llvm openjdk dotnet-8.0
+          echo "7zip 설치"
+        shell: pwsh
+
+      ############################################################
+      # Meaning-Based Transpiler (your core engine)
+      ############################################################
+      - name: Run Meaning-Based Transpiler
+        run: |
+          python3 meaning_transpiler.py src/ out/
+        shell: bash
+
+      ############################################################
+      # Build 4 Backends
+      ############################################################
+
+      # 1) Native (NASM)
+      - name: Build Native (NASM)
+        run: |
+          nasm -f elf64 out/native/main.asm -o out/native/main.o
+          clang out/native/main.o -o out/native_app
+        shell: bash
+
+      # 2) LLVM (clang -> llc)
+      - name: Build LLVM Backend
+        run: |
+          clang -S -emit-llvm out/llvm/main.c -o out/llvm/main.ll
+          llc out/llvm/main.ll -o out/llvm/main.s
+          clang out/llvm/main.s -o out/llvm_app
+        shell: bash
+
+      # 3) JVM (javac → jar)
+      - name: Build JVM Backend
+        run: |
+          javac out/jvm/Main.java
+          jar cfe out/jvm_app.jar Main -C out/jvm .
+        shell: bash
+
+      # 4) .NET (dotnet build)
+      - name: Build .NET Backend
+        run: |
+          dotnet build dotnet_proj/dotnet_proj.csproj -c Release -o out/dotnet
+        shell: bash
+
+      ############################################################
+      # OS-specific packaging
+      ############################################################
+      - name: Make ZIP
+        run: |
+          cd out
+          zip -r build_${{ matrix.os }}.zip ./
+        shell: bash
+
+      ############################################################
+      # SHA256 Proof + Ledger
+      ############################################################
+      - name: SHA256 Proof
+        run: |
+          mkdir -p proof
+          sha256sum out/build_${{ matrix.os }}.zip > proof/sha256_${{ matrix.os }}.txt
+        shell: bash
+
+      - name: Build Ledger
+        run: |
+          echo "Build Timestamp: $(date +%Y%m%d-%H%M%S)" > proof/ledger_${{ matrix.os }}.txt
+          echo "Commit: $GITHUB_SHA" >> proof/ledger_${{ matrix.os }}.txt
+          echo "OS: ${{ matrix.os }}" >> proof/ledger_${{ matrix.os }}.txt
+          echo "Transpiler: Meaning-Based Engine v1" >> proof/ledger_${{ matrix.os }}.txt
+        shell: bash
+
+      ############################################################
+      # Upload Artifacts
+      ############################################################
+      - name: Upload Artifact (ZIP)
+        uses: actions/upload-artifact@v4
+        with:
+          name: build_${{ matrix.os }}
+          path: out/build_${{ matrix.os }}.zip
+
+      - name: Upload Ledger
+        uses: actions/upload-artifact@v4
+        with:
+          name: proof_${{ matrix.os }}
+          path: proof/
