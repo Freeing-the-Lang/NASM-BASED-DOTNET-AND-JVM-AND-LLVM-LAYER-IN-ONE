@@ -63,17 +63,20 @@ jobs:
         gcc main.c -o main
 
     # ZIP 생성
-    - name: Create ZIP
+    - name: Create ZIP (Linux/macOS)
+      if: runner.os != 'Windows'
       shell: bash
       run: |
         cd out
         zip -r build_${{ matrix.os }}.zip .
 
-    # 업로드
-    - uses: actions/upload-artifact@v4
-      with:
-        name: build-${{ matrix.os }}
-        path: out/build_${{ matrix.os }}.zip
+    - name: Create ZIP (Windows)
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        cd out
+        Compress-Archive -Path * -DestinationPath build_windows-latest.zip
+
 
   release:
     needs: build
